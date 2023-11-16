@@ -81,7 +81,7 @@ describe cleaned_email_data
 # A table for ham emails keywords
 CREATE TABLE ham_clean_email_data AS
 SELECT *
-FROM clean_email_data
+FROM cleaned_email_data
 WHERE
   LOWER(Subject) LIKE '%work%' OR
   LOWER(Subject) LIKE '%project%' OR
@@ -106,7 +106,7 @@ WHERE
 # A table for spam emails keywords
 CREATE TABLE spam_clean_email_data  AS
 SELECT *
-FROM clean_email_data
+FROM cleaned_email_data
 WHERE
   
   LOWER(Subject) LIKE '%lottery%' OR
@@ -153,11 +153,11 @@ LIMIT 10;
 
 
   #A table to count ham emails for each account query
-CREATE TABLE ham_email_count AS
+CREATE TABLE ham_clean_email_count AS
 SELECT
   From_Address AS Email_id,
   COUNT(*) AS Ham_Count
-FROM ham_cleaned_email_data
+FROM ham_clean_email_data
 GROUP BY From_Address;
 
 
@@ -165,6 +165,141 @@ GROUP BY From_Address;
 SELECT
  Email_id,
   Ham_Count
-FROM ham_email_counts
+FROM ham_clean_email_count
 ORDER BY Ham_Count DESC
 LIMIT 10;
+ 
+#MapReduce
+Spam_keywords
+CREATE TABLE spam_email_token AS
+SELECT
+    From_Address AS account_id,
+    SPLIT(LOWER(Subject), ' ') AS words
+FROM
+    spam_clean_email_data;
+    
+    CREATE TABLE spam_email_tf AS
+SELECT
+    account_id,
+    word,
+    COUNT(word) AS term_frequency
+FROM
+    spam_email_token
+LATERAL VIEW EXPLODE(words) wordsTable AS word
+GROUP BY
+    account_id, word;
+
+
+CREATE TABLE spam_email_df AS
+SELECT
+    word,
+    COUNT(DISTINCT account_id) AS document_frequency
+FROM
+    spam_email_tf
+GROUP BY
+    word;
+
+
+#Calculate Inverse Document Frequency (IDF)
+CREATE TABLE spam_email_idf AS
+SELECT
+    word,
+    LOG10(COUNT(word) / document_frequency) AS inverse_document_frequency
+FROM
+    spam_email_df
+GROUP BY
+    word, document_frequency;
+
+
+CREATE TABLE spam_email_tfidf AS
+SELECT
+    t.account_id,
+    t.word,
+    t.term_frequency * i.inverse_document_frequency AS tfidf
+FROM
+    spam_email_tf t
+JOIN
+    spam_email_idf i
+ON
+    t.word = i.word;
+
+
+CREATE TABLE spam_email_top_keywords AS
+SELECT
+    account_id,
+    word,
+    tfidf
+FROM (
+    SELECT
+        account_id,
+        word,
+        tfidf,
+        ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY tfidf DESC) AS rk
+    FROM
+        spam_email_tfidf
+) ranked
+WHERE
+    rk <= 10;
+
+
+CREATE TABLE ham_tokens AS
+SELECT
+    To_Address AS account_id,
+    word
+FROM ham_clean_email_data
+LATERAL VIEW EXPLODE(SPLIT(LOWER(CONCAT(Subject, ' ', Body)), ' ')) exploded_words AS word;
+
+
+Tokenization and Term Frequency (TF) for Ham
+CREATE TABLE ham_email_tf AS
+SELECT
+    account_id,
+    word,
+    COUNT(1) AS term_frequency
+FROM
+    ham_tokens
+GROUP BY
+    account_id, word;
+
+
+Calculate Inverse Document Frequency (IDF) for Ham
+CREATE TABLE ham_email_idf AS
+SELECT
+    word,
+    LOG10(COUNT(DISTINCT word) / document_frequency) AS inverse_document_frequency
+FROM
+    ham_email_df
+GROUP BY
+    word, document_frequency;
+
+
+Calculate TF-IDF for Ham
+CREATE TABLE ham_email_tfidf AS
+SELECT
+    t.account_id,
+    t.word,
+    t.term_frequency * i.inverse_document_frequency AS tfidf
+FROM
+    ham_email_tf t
+JOIN
+    ham_email_idf i
+ON
+    t.word = i.word;
+
+
+CREATE TABLE ham_email_top_keywords AS
+SELECT
+    account_id,
+    word,
+    tfidf
+FROM (
+    SELECT
+        account_id,
+        word,
+        tfidf,
+        ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY tfidf DESC) AS rk
+    FROM
+        ham_email_tfidf
+) ranked
+WHERE
+    rk <= 10;
