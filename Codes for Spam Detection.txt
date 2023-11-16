@@ -1,0 +1,170 @@
+﻿Codes for Spam Detection
+
+
+#Firstly we create a table for the dataset stored in our s3 bucket
+CREATE TABLE email_blog_data (
+  DateTime_ TIMESTAMP,
+  Day INT,
+  Outside_Hours BOOLEAN,
+  From_Address ARRAY<STRING>,
+  To_Address ARRAY<STRING>,
+  Cc_Address ARRAY<STRING>,
+  Subject STRING,
+  Forwarded BOOLEAN,
+  Source STRING,
+  Body STRING,
+  DateTime_TS DOUBLE,
+  DateTime_HOUR INT,
+  DateTime_MONTH INT,
+  Class_Sentiment_1 STRING,
+  Class_Sentiment_2 STRING,
+  Class_Sentiment_Vader STRING,
+  Class_Alignment_1 STRING,
+  Class_Alignment_2 STRING,
+  Class_Alignment_3 STRING
+)
+
+
+
+
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LOCATION 's3://sommie/data1/';
+
+
+
+
+SELECT * FROM email_blog_data LIMIT 10;
+
+
+#to eliminate columns we do not need
+CREATE TABLE new_email_blog_data AS
+SELECT DateTime_, From_Address, To_Address, Cc_Address, Subject, Body
+FROM email_blog_data;
+
+
+#Replace NULL values with an empty string
+CREATE TABLE clean_new_email_blog_data AS
+SELECT
+    DateTime_,
+    CONCAT_WS(',', From_Address) AS From_Address,
+    CONCAT_WS(',', To_Address) AS To_Address,
+    CONCAT_WS(',', Cc_Address) AS Cc_Address,
+    CONCAT_WS(',', Subject) AS Subject,
+    CONCAT_WS(',', Body) AS Body
+FROM new_email_blog_data;
+
+
+
+
+
+
+#Remove characters that are not needed from relevant columns
+CREATE TABLE cleaned_email_data AS
+SELECT
+    DateTime_,
+    regexp_replace(From_Address, "[\"'\\[\\]]", '') AS From_Address,
+    regexp_replace(To_Address, "[\"'\\[\\]]", '') AS To_Address,
+    regexp_replace(Cc_Address, "[\"'\\[\\]]", '') AS Cc_Address,
+    regexp_replace(Subject, "[\"'\\[\\]]", '') AS Subject,
+    regexp_replace(Body, "[\"'\\[\\]]", '') AS Body
+FROM clean_new_email_blog_data ;
+
+
+
+
+describe cleaned_email_data
+
+
+
+
+# A table for ham emails keywords
+CREATE TABLE ham_clean_email_data AS
+SELECT *
+FROM clean_email_data
+WHERE
+  LOWER(Subject) LIKE '%work%' OR
+  LOWER(Subject) LIKE '%project%' OR
+  LOWER(Subject) LIKE '%meeting%' OR
+  LOWER(Subject) LIKE '%update%' OR
+  LOWER(Subject) LIKE '%deadline%' OR
+  LOWER(Subject) LIKE '%team%' OR
+  LOWER(Subject) LIKE '%progress%' OR
+  LOWER(Subject) LIKE '%report%' OR
+  LOWER(Body) LIKE '%work%' OR
+  LOWER(Body) LIKE '%project%' OR
+  LOWER(Body) LIKE '%meeting%' OR
+  LOWER(Body) LIKE '%update%' OR
+  LOWER(Body) LIKE '%deadline%'OR
+  LOWER(Body) LIKE '%team%' OR
+  LOWER(Body) LIKE '%progress%' OR
+  LOWER(Body) LIKE '%report%';
+
+
+
+
+# A table for spam emails keywords
+CREATE TABLE spam_clean_email_data  AS
+SELECT *
+FROM clean_email_data
+WHERE
+  
+  LOWER(Subject) LIKE '%lottery%' OR
+  LOWER(Subject) LIKE '%free%' OR
+  LOWER(Subject) LIKE '%discount%' OR
+  LOWER(Subject) LIKE '%offer%' OR
+  LOWER(Subject) LIKE '%cash%' OR
+  LOWER(Subject) LIKE '%earn%' OR
+  LOWER(Subject) LIKE '%credit%' OR
+  LOWER(Subject) LIKE '%debt%' OR
+  LOWER(Body) LIKE '%lottery%' OR
+  LOWER(Body) LIKE '%free%' OR
+  LOWER(Body) LIKE '%discount%' OR
+  LOWER(Body) LIKE '%offer%' OR
+  LOWER(Body) LIKE '%cash%' OR
+  LOWER(Body) LIKE '%earn%' OR
+  LOWER(Body) LIKE '%credit%' OR
+  LOWER(Body) LIKE '%debt%';
+
+
+  
+  #A table to count spam emails for each account query
+CREATE TABLE spam_clean_email_count AS
+SELECT
+  To_Address AS Email_id,
+  COUNT (*) AS Spam
+FROM spam_clean_email_data
+GROUP BY To_Address;
+
+
+#The top 10 spam accounts query
+SELECT
+  Email_id,
+  Spam
+FROM spam_clean_email_count
+ORDER BY Spam DESC
+LIMIT 10;
+
+
+
+
+
+
+
+
+  #A table to count ham emails for each account query
+CREATE TABLE ham_email_count AS
+SELECT
+  From_Address AS Email_id,
+  COUNT(*) AS Ham_Count
+FROM ham_cleaned_email_data
+GROUP BY From_Address;
+
+
+#The top 10 ham accounts
+SELECT
+ Email_id,
+  Ham_Count
+FROM ham_email_counts
+ORDER BY Ham_Count DESC
+LIMIT 10;
