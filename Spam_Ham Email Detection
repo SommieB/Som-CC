@@ -1,0 +1,204 @@
+### **AWS Code for Spam Detection: Detailed Description**
+
+This code provides a comprehensive workflow for detecting spam emails from a dataset stored in an Amazon S3 bucket. The process involves extracting, cleaning, and analyzing email data using SQL-based queries in AWS environments such as **AWS Athena** or **AWS Glue**. It also implements **TF-IDF (Term Frequency-Inverse Document Frequency)** calculations to identify the most relevant keywords associated with spam and ham (legitimate) emails.  
+
+---
+
+### **1. Data Ingestion and Initial Setup**
+1. **Create the Main Table (`email_blog_data`):**
+   - This table is populated with raw email data from the CSV file stored in the S3 bucket (`s3://sommie/data1/`).
+   - It contains fields such as:
+     - **DateTime_**: Timestamp of the email.
+     - **From_Address, To_Address, Cc_Address**: Email participants.
+     - **Subject and Body**: Content of the email.
+     - **Class Sentiment & Alignment**: Pre-existing sentiment labels.
+     
+   ```sql
+   CREATE TABLE email_blog_data (...) 
+   ROW FORMAT DELIMITED
+   FIELDS TERMINATED BY ','
+   LOCATION 's3://sommie/data1/';
+   ```
+
+2. **Preview Data:**
+   - Display the first 10 rows for validation.
+   ```sql
+   SELECT * FROM email_blog_data LIMIT 10;
+   ```
+
+---
+
+### **2. Data Cleaning and Preprocessing**
+1. **Select Relevant Columns:**
+   - Create a new table `new_email_blog_data` with only essential fields:
+     - DateTime_, From_Address, To_Address, Cc_Address, Subject, Body.
+   
+   ```sql
+   CREATE TABLE new_email_blog_data AS
+   SELECT DateTime_, From_Address, To_Address, Cc_Address, Subject, Body
+   FROM email_blog_data;
+   ```
+
+2. **Handle NULL Values:**
+   - Replace `NULL` with an empty string using the `CONCAT_WS()` function.
+   ```sql
+   CREATE TABLE clean_new_email_blog_data AS
+   SELECT DateTime_, CONCAT_WS(',', From_Address) AS From_Address, ...
+   FROM new_email_blog_data;
+   ```
+
+3. **Remove Unnecessary Characters:**
+   - Clean the email addresses and content by removing brackets and quotes.
+   ```sql
+   CREATE TABLE cleaned_email_data AS
+   SELECT DateTime_, regexp_replace(From_Address, "[\"'\\[\\]]", '') AS From_Address, ...
+   FROM clean_new_email_blog_data;
+   ```
+
+---
+
+### **3. Spam and Ham Classification**
+1. **Identify "Ham" Emails (Legitimate Emails):**
+   - Create a table `ham_clean_email_data` with emails containing work-related keywords.
+   ```sql
+   CREATE TABLE ham_clean_email_data AS
+   SELECT *
+   FROM cleaned_email_data
+   WHERE LOWER(Subject) LIKE '%work%' OR LOWER(Body) LIKE '%project%' ...;
+   ```
+
+2. **Identify "Spam" Emails:**
+   - Create a `spam_clean_email_data` table by filtering out promotional/scam-related keywords.
+   ```sql
+   CREATE TABLE spam_clean_email_data AS
+   SELECT *
+   FROM cleaned_email_data
+   WHERE LOWER(Subject) LIKE '%lottery%' OR LOWER(Body) LIKE '%free%' ...;
+   ```
+
+---
+
+### **4. Analyzing Spam and Ham Patterns**
+1. **Count Spam Emails per Recipient:**
+   - Generate the `spam_clean_email_count` table to find how many spam emails each account received.
+   ```sql
+   CREATE TABLE spam_clean_email_count AS
+   SELECT To_Address AS Email_id, COUNT(*) AS Spam
+   FROM spam_clean_email_data
+   GROUP BY To_Address;
+   ```
+
+2. **Top 10 Spam Targets:**
+   - Identify the top 10 accounts receiving the most spam.
+   ```sql
+   SELECT Email_id, Spam
+   FROM spam_clean_email_count
+   ORDER BY Spam DESC
+   LIMIT 10;
+   ```
+
+3. **Count Ham Emails per Sender:**
+   - Similar logic applies to create `ham_clean_email_count` to track legitimate communication patterns.
+   ```sql
+   CREATE TABLE ham_clean_email_count AS
+   SELECT From_Address AS Email_id, COUNT(*) AS Ham_Count
+   FROM ham_clean_email_data
+   GROUP BY From_Address;
+   ```
+
+4. **Top 10 Ham Senders:**
+   - Identify the most frequent legitimate communicators.
+   ```sql
+   SELECT Email_id, Ham_Count
+   FROM ham_clean_email_count
+   ORDER BY Ham_Count DESC
+   LIMIT 10;
+   ```
+
+---
+
+### **5. Advanced Analysis with MapReduce and TF-IDF**
+This section implements a **MapReduce** workflow to extract the most significant keywords for spam and ham emails using **TF-IDF**.
+
+---
+
+#### **Step 1: Tokenization**
+1. **Tokenize Spam Emails:**
+   - Split email subjects into words for further analysis.
+   ```sql
+   CREATE TABLE spam_email_token AS
+   SELECT From_Address AS account_id, SPLIT(LOWER(Subject), ' ') AS words
+   FROM spam_clean_email_data;
+   ```
+
+2. **Tokenize Ham Emails:**
+   ```sql
+   CREATE TABLE ham_tokens AS
+   SELECT To_Address AS account_id, word
+   FROM ham_clean_email_data
+   LATERAL VIEW EXPLODE(SPLIT(LOWER(CONCAT(Subject, ' ', Body)), ' ')) exploded_words AS word;
+   ```
+
+---
+
+#### **Step 2: Term Frequency (TF) Calculation**
+- Calculate how often each word appears within each account.
+
+1. **Spam TF Calculation:**
+   ```sql
+   CREATE TABLE spam_email_tf AS
+   SELECT account_id, word, COUNT(word) AS term_frequency
+   FROM spam_email_token
+   LATERAL VIEW EXPLODE(words) wordsTable AS word
+   GROUP BY account_id, word;
+   ```
+
+2. **Ham TF Calculation:**
+   ```sql
+   CREATE TABLE ham_email_tf AS
+   SELECT account_id, word, COUNT(1) AS term_frequency
+   FROM ham_tokens
+   GROUP BY account_id, word;
+   ```
+
+---
+
+#### **Step 3: Inverse Document Frequency (IDF) Calculation**
+- Measure how unique a word is across all accounts.
+
+1. **Spam IDF Calculation:**
+   ```sql
+   CREATE TABLE spam_email_idf AS
+   SELECT word, LOG10(COUNT(word) / document_frequency) AS inverse_document_frequency
+   FROM spam_email_df
+   GROUP BY word, document_frequency;
+   ```
+
+---
+
+#### **Step 4: TF-IDF Calculation**
+1. **Spam TF-IDF Calculation:**
+   ```sql
+   CREATE TABLE spam_email_tfidf AS
+   SELECT t.account_id, t.word, t.term_frequency * i.inverse_document_frequency AS tfidf
+   FROM spam_email_tf t
+   JOIN spam_email_idf i ON t.word = i.word;
+   ```
+
+---
+
+#### **Step 5: Extract Top Keywords**
+- Identify the most important words contributing to spam and ham classification.
+
+1. **Spam Top Keywords:**
+   ```sql
+   CREATE TABLE spam_email_top_keywords AS
+   SELECT account_id, word, tfidf
+   FROM (
+       SELECT account_id, word, tfidf,
+              ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY tfidf DESC) AS rk
+       FROM spam_email_tfidf
+   ) ranked
+   WHERE rk <= 10;
+   ```
+
